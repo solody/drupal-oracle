@@ -472,13 +472,17 @@ class Connection extends DatabaseConnection {
       "/([^\s\(]+) & ([^\s]+) = ([^\s\)]+)/",
       "/([^\s\(]+) & ([^\s]+) <> ([^\s\)]+)/",
       '/^RELEASE SAVEPOINT (.*)$/',
-      '/\((.*) REGEXP (.*)\)/',
+      //'/\((.*) REGEXP (.*)\)/',
+      '/([^\s\(]*) NOT REGEXP ([^\s\)]*)/',
+      '/([^\s\(]*) REGEXP ([^\s\)]*)/',
     );
     $replace = array(
       "BITAND(\\1,\\2) = \\3",
       "BITAND(\\1,\\2) <> \\3",
       'begin null; end;',
-      "REGEXP_LIKE(\\1,\\2)",
+      //"REGEXP_LIKE(\\1,\\2)",
+      "NOT REGEXP_LIKE(\\1, \\2)",
+      "REGEXP_LIKE(\\1, \\2)",
     );
     $query = preg_replace($search, $replace, $query);
 
