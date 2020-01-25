@@ -422,6 +422,15 @@ class Schema extends DatabaseSchema {
    * {@inheritdoc}
    */
   public function dropTable($table) {
+
+    // Workaround to fix deleting of simpletest data.
+    if (preg_match('/^test\d+.*/', $table) !== FALSE) {
+
+      // Always convert to uppercase, because of conversion to lowercase in
+      // findTables() method.
+      return $this->connection->query('DROP USER '. strtoupper($table) .' CASCADE');
+    }
+
     $info = $this->getTableInfo($table);
 
     if ($info->sequence_name) {
@@ -734,7 +743,17 @@ class Schema extends DatabaseSchema {
     $schema = $this->tableSchema($table_expression);
     $table_expression = str_replace('"' . $schema . '"."', '', $table_expression);
     $table_expression = str_replace('"', '', $table_expression);
-    $res = $this->connection->query("SELECT '\"'||owner||'\".\"'||table_name||'\"' tab FROM all_tables WHERE owner= ? and table_name LIKE ?", array($schema, strtoupper($table_expression)))->fetchAllKeyed(0, 0);
+
+    if (strtolower($table_expression) === 'test%') {
+
+      // Simpletest data truncating. Find all `test%` users (not tables).
+      // Always convert to lowercase because of regular expression in the core.
+      // @see EnvironmentCleaner::doCleanDatabase()
+      $res = array_map('strtolower', $this->connection->query("SELECT t.username FROM DBA_USERS t WHERE t.username LIKE 'TEST%'")->fetchAllKeyed(0, 0));
+    }
+    else {
+      $res = $this->connection->query("SELECT '\"'||owner||'\".\"'||table_name||'\"' tab FROM all_tables WHERE owner= ? and table_name LIKE ?", array($schema, strtoupper($table_expression)))->fetchAllKeyed(0, 0);
+    }
 
     return $res;
   }
