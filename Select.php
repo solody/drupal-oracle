@@ -11,6 +11,13 @@ use Drupal\Core\Database\Query\SelectInterface;
 class Select extends QuerySelect {
 
   /**
+   * The connection object on which to run this query.
+   *
+   * @var \Drupal\Driver\Database\oracle\Connection
+   */
+  protected $connection;
+
+  /**
    * {@inheritdoc}
    */
   public function arguments() {
@@ -88,7 +95,12 @@ class Select extends QuerySelect {
         $table_string = '(' . (string) $table['table'] . ')';
       }
       else {
-        $table_string = '{' . $this->connection->escapeTable($table['table']) . '}';
+        $table_string = $this->connection->escapeTable($table['table']);
+
+        // Do not attempt prefixing cross database / schema queries.
+        if (strpos($table_string, '@') === FALSE && strpos($table_string, '.') === FALSE) {
+          $table_string = '{' . $table_string . '}';
+        }
       }
 
       // Don't use the AS keyword for table aliases, as some

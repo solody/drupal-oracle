@@ -309,6 +309,32 @@ class Connection extends DatabaseConnection {
   /**
    * {@inheritdoc}
    */
+  public function getFullQualifiedTableName($table) {
+    $options = $this->getConnectionOptions();
+    $prefix = $this->tablePrefix($table);
+
+    // The fully qualified table name in Oracle Database is in the form of:
+    // <user_name>.<table_name>@<database>. Where <database> is either
+    // a database link created via `CREATE DATABASE LINK` or an alias from
+    // Local Naming Parameters configuration (by default is located in the
+    // $ORACLE_HOME/network/admin/tnsnames.ora). This Driver DO NOT support
+    // auto creation of database links for the connection.
+    return $prefix . '.' . $table . '@' . $options['database'];
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function escapeTable($table) {
+    if (!isset($this->escapedNames[$table])) {
+      $this->escapedNames[$table] = preg_replace('/[^A-Za-z0-9_.@]+/', '', $table);
+    }
+    return $this->escapedNames[$table];
+  }
+
+  /**
+   * {@inheritdoc}
+   */
   public function nextId($existing_id = 0) {
     // Retrive the name of the sequence. This information cannot be cached
     // because the prefix may change, for example, like it does in simpletests.
