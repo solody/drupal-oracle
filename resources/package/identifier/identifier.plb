@@ -174,6 +174,11 @@ as
   exception
     when no_data_found then
       execute immediate 'GRANT connect, resource to "'||v_db_prefix||'" identified by "'||v_db_prefix||'"';
+
+      -- Allow to allocate as much space as needed.
+      -- Required for a proper tests run.
+      execute immediate 'GRANT UNLIMITED TABLESPACE TO "'||v_db_prefix||'"';
+
       return v_db_prefix;
   end;
 
