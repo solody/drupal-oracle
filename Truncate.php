@@ -13,7 +13,8 @@ class Truncate extends QueryTruncate {
    * {@inheritdoc}
    */
   public function __toString() {
-    return 'TRUNCATE TABLE {' . $this->connection->escapeTable($this->table) . '} ';
+    $query = parent::__toString();
+    return str_replace('TRUNCATE', 'TRUNCATE TABLE', $query);
   }
 
 }
