@@ -16,8 +16,9 @@ define('ORACLE_EMPTY_STRING_REPLACER', '^');
  * Maximum oracle identifier length (e.g. table names cannot exceed the length).
  *
  * @TODO: make dynamic. 30 is a limit for v11. In OD12+ has new limit of 128.
+ * Current value can be get by `DESCRIBE all_tab_columns`.
  */
-define('ORACLE_IDENTIFIER_MAX_LENGTH', 30);
+define('ORACLE_IDENTIFIER_MAX_LENGTH', 128);
 
 /**
  * Prefix used for long identifier keys.
@@ -120,6 +121,27 @@ class Connection extends DatabaseConnection {
    * {@inheritdoc}
    */
   public static function open(array &$connection_options = array()) {
+
+    /**
+     * Here is full possible TNS description (with master/slave).
+     * @todo: implement all options?
+     *
+     * (DESCRIPTION_LIST=
+     *   (LOAD_BALANCE=off)
+     *   (FAILOVER=on)
+     *   (DESCRIPTION=
+     *     (ADDRESS=(PROTOCOL=TCPS)(HOST=<master_host>)(PORT=<master_port>))
+     *     (CONNECT_DATA=(SERVICE_NAME=<master_service_name>))
+     *     (SECURITY= (SSL_SERVER_CERT_DN="for example cn=sales,cn=OracleContext,dc=us,dc=acme,dc=com"))
+     *   )
+     *   (DESCRIPTION=
+     *     (ADDRESS=(PROTOCOL=TCPS)(HOST=<slave_host>)(PORT=<slave_port>))
+     *     (CONNECT_DATA=(SERVICE_NAME=<master_service_name>))
+     *     (SECURITY=(SSL_SERVER_CERT_DN="for example cn=sales,cn=OracleContext,dc=us,dc=acme,dc=com"))
+     *   )
+     * )
+     */
+
     if ($connection_options['host'] === 'USETNS') {
       // Use database as TNSNAME.
       $dsn = 'oci:dbname=' . $connection_options['database'] . ';charset=AL32UTF8';
