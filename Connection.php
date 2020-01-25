@@ -183,6 +183,20 @@ class Connection extends DatabaseConnection {
       }
       else {
         $this->expandArguments($query, $args);
+
+        // To protect against SQL injection, Drupal only supports executing one
+        // statement at a time.  Thus, the presence of a SQL delimiter (the
+        // semicolon) is not allowed unless the option is set.  Allowing
+        // semicolons should only be needed for special cases like defining a
+        // function or stored procedure in SQL.
+        // @see https://www.drupal.org/project/drupal/issues/2489672
+        if (empty($options['allow_delimiter_in_query'])) {
+          $query = rtrim($query, ";  \t\n\r\0\x0B");
+          if (strpos($query, ';') !== FALSE) {
+            throw new \InvalidArgumentException('; is not supported in SQL strings. Use only one statement at a time.');
+          }
+        }
+
         $stmt = $this->prepareQuery($query);
         $stmt->execute($this->cleanupArgs($args), $options);
       }
@@ -204,6 +218,9 @@ class Connection extends DatabaseConnection {
         default:
           throw new \PDOException('Invalid return directive: ' . $options['return']);
       }
+    }
+    catch (\InvalidArgumentException $exception) {
+      throw $exception;
     }
     catch (\Exception $e) {
       $query_string = ($query instanceof \PDOStatement) ? $stmt->queryString : $query;
@@ -375,7 +392,7 @@ class Connection extends DatabaseConnection {
   }
 
   /**
-   * Oracle connection helper: do not log driver internal queries.
+   * Executes an internal driver queries query string against the database.
    */
   public function oracleQuery($query, $args = NULL) {
     try {

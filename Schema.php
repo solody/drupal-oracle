@@ -14,6 +14,13 @@ use Drupal\Core\Database\Schema as DatabaseSchema;
 class Schema extends DatabaseSchema {
 
   /**
+   * The database connection.
+   *
+   * @var \Drupal\Driver\Database\oracle\Connection
+   */
+  protected $connection;
+
+  /**
    * A cache of information about blob columns and sequences of tables.
    *
    * @var array
@@ -137,14 +144,20 @@ class Schema extends DatabaseSchema {
     }
 
     $trigger .= 'end if; end;';
-    $this->connection->query($trigger);
+    $this->connection->query($trigger, [], ['allow_delimiter_in_query' => TRUE]);
   }
 
   /**
    * {@inheritdoc}
    */
   public function createTable($name, $table) {
-    parent::createTable($name, $table);
+    if ($this->tableExists($name)) {
+      throw new SchemaObjectExistsException(t('Table @name already exists.', ['@name' => $name]));
+    }
+    $statements = $this->createTableSql($name, $table);
+    foreach ($statements as $statement) {
+      $this->connection->query($statement, [], ['allow_delimiter_in_query' => TRUE]);
+    }
     $this->rebuildDefaultsTrigger($name);
     $this->resetLongIdentifiers();
   }
@@ -185,7 +198,7 @@ class Schema extends DatabaseSchema {
    * @param array $table
    *   A Schema API table definition array.
    *
-   * @return string
+   * @return string[]
    *   An array of SQL statements to create the table.
    */
   protected function createTableSql($name, array $table) {
