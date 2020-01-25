@@ -6,6 +6,7 @@ use Drupal\Core\Database\DatabaseExceptionWrapper;
 use Drupal\Core\Database\IntegrityConstraintViolationException;
 use Drupal\Core\Database\Database;
 use Drupal\Core\Database\Connection as DatabaseConnection;
+use Drupal\Core\Database\Log;
 
 /**
  * Used to replace '' character in queries.
@@ -348,17 +349,50 @@ class Connection extends DatabaseConnection {
   }
 
   /**
-   * Oracle connection helper.
+   * Oracle connection helper: do not log driver internal queries.
    */
   public function oracleQuery($query, $args = NULL) {
     try {
+      $logger = $this->pauseLog();
       $stmt = $this->prepare($query);
       $stmt->execute($args);
+      $this->continueLog($logger);
       return $stmt;
     }
     catch (\Exception $e) {
       syslog(LOG_ERR, "error: {$e->getMessage()} {$query}");
       throw $e;
+    }
+  }
+
+  /**
+   * Pause the database logging if any available.
+   *
+   * @see \Drupal\Core\Database::startLog()
+   *
+   * @return \Drupal\Core\Database\Log|null
+   *  An instance of the database logger, or NULL if logging was not started.
+   */
+  public function pauseLog()  {
+    if (!empty($this->logger)) {
+      $logger = $this->logger;
+      $this->logger = NULL;
+      return $logger;
+    }
+    return NULL;
+  }
+
+  /**
+   * Continue the previously paused database logger.
+   *
+   * @param $logger \Drupal\Core\Database\Log|null
+   *  An instance of the database logger, or NULL if logging was not started.
+   *
+   * @see \Drupal\Driver\Database\oracle\Connection::pauseLog()
+   */
+  public function continueLog($logger) {
+    if ($logger instanceof Log) {
+      $this->logger = $logger;
     }
   }
 
