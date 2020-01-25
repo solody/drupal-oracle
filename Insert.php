@@ -2,7 +2,7 @@
 
 namespace Drupal\Driver\Database\oracle;
 
-use Drupal\Core\Database;
+use Drupal\Core\Database\Database;
 use Drupal\Core\Database\Query\Insert as QueryInsert;
 
 /**
@@ -29,12 +29,7 @@ class Insert extends QueryInsert {
     $info = $this->connection->schema()->getTableInfo($this->table);
     if (!empty($info->sequence_name)) {
       $this->queryOptions['sequence_name'] = $info->sequence_name;
-      if (class_exists("Database")) {
-        $this->queryOptions['return'] = Database::RETURN_INSERT_ID;
-      }
-      else {
-        $this->queryOptions['return'] = 3;
-      }
+      $this->queryOptions['return'] = Database::RETURN_INSERT_ID;
     }
 
     $stmt = $this->connection->prepareQuery((string) $this);

@@ -3,7 +3,7 @@ There are two ways to install Drupal 8 Oracle Database Driver:
 1. Composer way.
 
 Step 1. Add one more installer-paths to yours composer.json:
-"web/drivers/lib/Drupal/Driver/Database/{$name}":["drupal/oracle"]
+"web/drivers/lib/Drupal/Driver/Database/{$name}": ["drupal/oracle"]
 This path should be added before "type:drupal-module" path.
 
 More details about the issue with installer-paths:

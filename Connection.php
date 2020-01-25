@@ -412,8 +412,9 @@ class Connection extends DatabaseConnection {
    */
   public function checkDbPrefix($db_prefix) {
     if (empty($db_prefix)) {
-      return;
+      return NULL;
     }
+
     if (!isset($this->oraclePrefix[$db_prefix])) {
       $this->oraclePrefix[$db_prefix] = $this->oracleQuery("select identifier.check_db_prefix(?) from dual", array($db_prefix))->fetchColumn();
     }
