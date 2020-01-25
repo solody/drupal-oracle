@@ -2,6 +2,22 @@ create or replace
 package body identifier
 as
 
+  function long_identifier_prefix
+  return varchar2 as
+  begin
+    return '<?php print ORACLE_LONG_IDENTIFIER_PREFIX; ?>';
+  end;
+
+  function identifier_max_length return number as
+  begin
+    return <?php print ORACLE_IDENTIFIER_MAX_LENGTH; ?>;
+  end;
+
+  function empty_replacer_char return varchar2 as
+  begin
+    return '<?php print ORACLE_EMPTY_STRING_REPLACER; ?>';
+  end;
+
   function get_for(p_long_identifier varchar2)
   return varchar2
   as pragma autonomous_transaction;
@@ -17,7 +33,7 @@ as
        from long_identifiers
       where identifier= upper(p_long_identifier);
 
-     return long_identifier_prefix||v_id;
+     return long_identifier_prefix()||v_id;
 
   exception
    when no_data_found then
@@ -27,7 +43,7 @@ as
        returning id into v_id;
      commit;
 
-     return long_identifier_prefix||v_id;
+     return long_identifier_prefix()||v_id;
 
   end;
 
@@ -55,7 +71,7 @@ as
         and table_name= v_table_oname
         and owner= v_schema;
 
-     if instr(v_col_name,long_identifier_prefix) > 0 then
+     if instr(v_col_name,long_identifier_prefix()) > 0 then
 
        declare
          v_id number;
@@ -80,8 +96,9 @@ as
      return '"'||v_schema||'"."'||v_sequence_oname||'"';
 
   exception
-   when others then
-     return null;
+    WHEN TOO_MANY_ROWS THEN return NULL;
+    WHEN NO_DATA_FOUND THEN return NULL;
+    WHEN others THEN return NULL;
   end;
 
   function get_serial(p_table varchar2, p_schema varchar2)
@@ -156,7 +173,7 @@ as
 
   exception
     when no_data_found then
-      execute immediate 'grant connect, resource to "'||v_db_prefix||'" identified by "'||v_db_prefix||'"';
+      execute immediate 'GRANT connect, resource to "'||v_db_prefix||'" identified by "'||v_db_prefix||'"';
       return v_db_prefix;
   end;
 

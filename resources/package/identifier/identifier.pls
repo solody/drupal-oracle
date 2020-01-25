@@ -1,10 +1,6 @@
 create or replace package identifier
 as
 
-  long_identifier_prefix  constant varchar2(10):= '<?php print ORACLE_LONG_IDENTIFIER_PREFIX; ?>';
-  identifier_max_length   constant number:= <?php print ORACLE_IDENTIFIER_MAX_LENGTH; ?>;
-  empty_replacer_char     constant varchar2(10):= '<?php print ORACLE_EMPTY_STRING_REPLACER; ?>';
-
   type serial_info is record
   (
       sequence_name    varchar2(30),
@@ -18,6 +14,15 @@ as
   type vc_list is table of varchar2(4000 char);
 
   type vc_arr is table of varchar2(4000 char) index by binary_integer;
+
+  function long_identifier_prefix
+  return varchar2;
+
+  function identifier_max_length
+  return number;
+
+  function empty_replacer_char
+  return varchar2;
 
   function get_for(p_long_identifier varchar2)
   return varchar2;
