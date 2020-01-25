@@ -38,7 +38,20 @@ class Tasks extends InstallTasks {
    * {@inheritdoc}
    */
   public function minimumVersion() {
+
+    // @TODO: add version validation.
     return NULL;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getFormOptions(array $database) {
+    $form = parent::getFormOptions($database);
+    if (empty($form['advanced_options']['port']['#default_value'])) {
+      $form['advanced_options']['port']['#default_value'] = '1521';
+    }
+    return $form;
   }
 
   /**

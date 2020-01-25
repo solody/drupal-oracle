@@ -120,11 +120,6 @@ class Connection extends DatabaseConnection {
    * {@inheritdoc}
    */
   public static function open(array &$connection_options = array()) {
-    // Default to TCP connection on port 1521.
-    if (empty($connection_options['port'])) {
-      $connection_options['port'] = 1521;
-    }
-
     if ($connection_options['host'] === 'USETNS') {
       // Use database as TNSNAME.
       $dsn = 'oci:dbname=' . $connection_options['database'] . ';charset=AL32UTF8';
