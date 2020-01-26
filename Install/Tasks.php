@@ -17,12 +17,6 @@ class Tasks extends InstallTasks {
   protected $pdoDriver = 'oci';
 
   /**
-   * @todo: return base tasks.
-   * {@inheritdoc}
-   */
-  protected $tasks = [];
-
-  /**
    * {@inheritdoc}
    */
   private $pdoBindLengthLimits = array(4000, 1332, 665);
@@ -62,9 +56,7 @@ class Tasks extends InstallTasks {
       // This doesn't actually test the connection.
       Database::setActiveConnection();
 
-      // @TODO: make this dynamic.
-      $dir = getcwd() . '/drivers/lib/Drupal/Driver/Database/oracle/resources';
-
+      $dir = DRUPAL_ROOT . '/drivers/lib/Drupal/Driver/Database/oracle/resources';
       $this->determineSupportedBindSize();
       $this->createFailsafeObjects("{$dir}/table");
       $this->createFailsafeObjects("{$dir}/index");
@@ -97,20 +89,6 @@ class Tasks extends InstallTasks {
    */
   private function oracleQuery($sql, $args = NULL) {
     return Database::getConnection()->oracleQuery($sql, $args);
-  }
-
-  /**
-   * {@inheritdoc}
-   */
-  protected function runTestQuery($query, $pass, $fail, $fatal = FALSE) {
-    try {
-      $this->oracleQuery($query);
-      $this->pass(t($pass));
-    }
-    catch (\Exception $e) {
-      $this->fail(t($fail, ['%query' => $query, '%error' => $e->getMessage(), '%name' => $this->name()]));
-      return !$fatal;
-    }
   }
 
   /**
