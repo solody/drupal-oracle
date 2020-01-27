@@ -137,6 +137,14 @@ class Select extends QuerySelect {
       $query .= "\nHAVING " . $this->having;
     }
 
+    // UNION is a little odd, as the select queries to combine are passed into
+    // this query, but syntactically they all end up on the same level.
+    if ($this->union) {
+      foreach ($this->union as $union) {
+        $query .= ' ' . $union['type'] . ' ' . (string) $union['query'];
+      }
+    }
+
     // ORDER BY.
     if ($this->order) {
       $query .= "\nORDER BY ";
@@ -147,14 +155,7 @@ class Select extends QuerySelect {
       $query .= implode(', ', $fields);
     }
 
-    // UNION is a little odd, as the select queries to combine are passed into
-    // this query, but syntactically they all end up on the same level.
-    if ($this->union) {
-      foreach ($this->union as $union) {
-        $query .= ' ' . $union['type'] . ' ' . (string) $union['query'];
-      }
-    }
-
+    // RANGE.
     if (!empty($this->range)) {
       $start = ((int) $this->range['start'] + 1);
       $end = ((int) $this->range['length'] + (int) $this->range['start']);
