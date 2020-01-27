@@ -437,7 +437,7 @@ class Schema extends DatabaseSchema {
   public function dropTable($table) {
 
     // Workaround to fix deleting of simpletest data.
-    if (preg_match('/^test\d+.*/', $table) !== FALSE) {
+    if (preg_match('/^test\d+.*/', $table) === 1) {
 
       // Always convert to uppercase, because of conversion to lowercase in
       // findTables() method.
