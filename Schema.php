@@ -589,7 +589,12 @@ class Schema extends DatabaseSchema {
    * {@inheritdoc}
    */
   public function dropIndex($table, $name) {
+    if (!$this->indexExists($table, $name)) {
+      return FALSE;
+    }
+
     $this->connection->query('DROP INDEX ' . $this->oid('IDX_' . $table . '_' . $name, TRUE));
+    return TRUE;
   }
 
   /**
