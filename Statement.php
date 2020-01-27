@@ -45,7 +45,7 @@ class Statement extends DatabaseStatement implements \IteratorAggregate {
   /**
    * {@inheritdoc}
    */
-  public function fetchObject($class_name = "stdClass", array $ctor_args = array()) {
+  public function fetchObject($class_name = 'stdClass', $ctor_args = []) {
     return $this->dbh->cleanupFetched(parent::fetchObject($class_name, $ctor_args));
   }
 
