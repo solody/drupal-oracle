@@ -224,6 +224,7 @@ class Schema extends DatabaseSchema {
     $sql_keys = array();
 
     if (isset($table['primary key']) && is_array($table['primary key'])) {
+      $this->ensureNotNullPrimaryKey($table['primary key'], $table['fields']);
       $sql_keys[] = 'CONSTRAINT ' . $this->oid('PK_' . $name) . ' PRIMARY KEY (' . $this->createColsSql($table['primary key']) . ')';
     }
 
@@ -474,6 +475,19 @@ class Schema extends DatabaseSchema {
    * {@inheritdoc}
    */
   public function addField($table, $field, $spec, $new_keys = array()) {
+    if (!$this->tableExists($table)) {
+      throw new SchemaObjectDoesNotExistException(t("Cannot add field @table.@field: table doesn't exist.", ['@field' => $field, '@table' => $table]));
+    }
+    if ($this->fieldExists($table, $field)) {
+      throw new SchemaObjectExistsException(t('Cannot add field @table.@field: field already exists.', ['@field' => $field, '@table' => $table]));
+    }
+
+    // Fields that are part of a PRIMARY KEY must be added as NOT NULL.
+    $is_primary_key = isset($new_keys['primary key']) && in_array($field, $new_keys['primary key'], TRUE);
+    if ($is_primary_key) {
+      $this->ensureNotNullPrimaryKey($new_keys['primary key'], [$field => $spec]);
+    }
+
     $fixnull = FALSE;
 
     if (!empty($spec['not null']) && !isset($spec['default'])) {
@@ -612,7 +626,17 @@ class Schema extends DatabaseSchema {
   /**
    * {@inheritdoc}
    */
-  public function changeField($table, $field, $field_new, $spec, $new_keys = array()) {
+  public function changeField($table, $field, $field_new, $spec, $keys_new = array()) {
+    if (!$this->fieldExists($table, $field)) {
+      throw new SchemaObjectDoesNotExistException(t("Cannot change the definition of field @table.@name: field doesn't exist.", ['@table' => $table, '@name' => $field]));
+    }
+    if (($field != $field_new) && $this->fieldExists($table, $field_new)) {
+      throw new SchemaObjectExistsException(t('Cannot rename field @table.@name to @name_new: target field already exists.', ['@table' => $table, '@name' => $field, '@name_new' => $field_new]));
+    }
+    if (isset($keys_new['primary key']) && in_array($field_new, $keys_new['primary key'], TRUE)) {
+      $this->ensureNotNullPrimaryKey($keys_new['primary key'], [$field_new => $spec]);
+    }
+
     $info = $this->getTableSerialInfo($table);
 
     if (!empty($info->sequence_name) && $this->oid($field, FALSE, FALSE) == $info->field_name) {
@@ -639,8 +663,8 @@ class Schema extends DatabaseSchema {
 
     $this->dropField($table, $field . '_old');
 
-    if (isset($new_keys)) {
-      $this->createKeys($table, $new_keys);
+    if (isset($keys_new)) {
+      $this->createKeys($table, $keys_new);
     }
 
     if (!empty($info->sequence_name) && $this->oid($field, FALSE, FALSE) == $info->field_name) {
