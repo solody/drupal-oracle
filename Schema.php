@@ -21,6 +21,18 @@ class Schema extends DatabaseSchema {
   protected $connection;
 
   /**
+   * An array of driver internal tables names.
+   */
+  protected $driverTables = [
+    'BIND_TEST',
+    'BLOBS',
+    'BLOB_COLUMN',
+    'USED_BLOBS',
+    'LONG_IDENTIFIERS',
+    'ORACLE_BIND_SIZE',
+  ];
+
+  /**
    * A cache of information about blob columns and sequences of tables.
    *
    * @var array
@@ -758,22 +770,54 @@ class Schema extends DatabaseSchema {
    * {@inheritdoc}
    */
   public function findTables($table_expression) {
-    $schema = $this->tableSchema($table_expression);
-    $table_expression = str_replace('"' . $schema . '"."', '', $table_expression);
-    $table_expression = str_replace('"', '', $table_expression);
+    $individually_prefixed_tables = $this->connection->getUnprefixedTablesMap();
+    $default_prefix = $this->connection->tablePrefix();
+    $expression_prefix = $this->tableSchema($table_expression);
+    $tables = [];
 
-    if (strtolower($table_expression) === 'test%') {
+    // Load all the tables up front in order to take into account per-table
+    // prefixes. The actual matching is done at the bottom of the method.
+    // Don't use {} around `all_tables` table.
+    $all_tables = $this->connection->query('SELECT owner, LOWER(table_name) as table_name FROM all_tables')->fetchAll();
+    foreach ($all_tables as $table) {
+      $table->table_name_prefixed = $this->oid($table->owner) . '.' . $this->oid($table->table_name);
 
-      // Simpletest data truncating. Find all `test%` users (not tables).
-      // Always convert to lowercase because of regular expression in the core.
-      // @see EnvironmentCleaner::doCleanDatabase()
-      $res = array_map('strtolower', $this->connection->query("SELECT t.username FROM DBA_USERS t WHERE t.username LIKE 'TEST%'")->fetchAllKeyed(0, 0));
+      // Ignore all tables according to the prefix in the search expression.
+      if ($expression_prefix && $table->owner !== $expression_prefix) {
+        continue;
+      }
+
+      // Take into account tables that have an individual prefix.
+      if (isset($individually_prefixed_tables[$table->table_name_prefixed]) &&
+        $table->table_name === $individually_prefixed_tables[$table->table_name_prefixed]) {
+        $tables[$table->table_name] = $table->table_name;
+      }
+
+      // This table name does not start the default prefix, which means that
+      // it is not managed by Drupal so it should be excluded from the result.
+      elseif ($default_prefix && $table->owner !== $default_prefix) {
+        continue;
+      }
+
+      // Ignore all internal tables needed to operate of this driver.
+      elseif (in_array($table->table_name, $this->driverTables, TRUE)) {
+        continue;
+      }
+
+      $tables[$table->table_name] = $table->table_name;
     }
-    else {
-      $res = $this->connection->query("SELECT '\"'||owner||'\".\"'||table_name||'\"' tab FROM all_tables WHERE owner= ? and table_name LIKE ?", array($schema, strtoupper($table_expression)))->fetchAllKeyed(0, 0);
-    }
 
-    return $res;
+    // @todo: simpletest data truncating
+    // @see EnvironmentCleaner::doCleanDatabase().
+    // if ($table_expression === 'TEST%') {
+    //   $all_tables = $this->connection->query("SELECT t.username FROM DBA_USERS t WHERE t.username LIKE 'TEST%'");
+    // }
+
+    // Convert the table expression from its SQL LIKE syntax to a regular
+    // expression and escape the delimiter that will be used for matching.
+    $table_expression = str_replace(['%', '_'], ['.*?', '.'], preg_quote($table_expression, '/'));
+    $tables = preg_grep('/^' . $table_expression . '$/i', $tables);
+    return array_map('strtolower', $tables);
   }
 
   /**

@@ -77,8 +77,6 @@ class Connection extends DatabaseConnection {
    */
   protected $statementClass = 'Drupal\Driver\Database\oracle\Statement';
 
-  private $oraclePrefix = array();
-
   private $maxVarchar2Size = ORACLE_MIN_PDO_BIND_LENGTH;
 
   /**
@@ -94,14 +92,10 @@ class Connection extends DatabaseConnection {
     // Transactional DDL is not available in Oracle.
     $this->transactionalDDLSupport = FALSE;
 
-    // Needed by DatabaseConnection.getConnectionOptions.
-    $this->connectionOptions = $connection_options;
-
     // Setup session attributes.
     try {
       $stmt = parent::prepare("begin ? := setup_session; end;");
       $stmt->bindParam(1, $this->maxVarchar2Size, \PDO::PARAM_INT | \PDO::PARAM_INPUT_OUTPUT, 32);
-
       $stmt->execute();
     }
     catch (\Exception $ex) {
@@ -114,8 +108,10 @@ class Connection extends DatabaseConnection {
       $this->external = TRUE;
     }
 
-    // Initialize db_prefix cache.
-    $this->oraclePrefix = array();
+    // Ensure all used Oracle prefixes (users schemas) exists.
+    foreach ($this->prefixes as $table_name => $prefix) {
+      $this->prefixes[$table_name] = $this->oracleQuery('SELECT identifier.check_db_prefix(?) FROM dual', [$prefix])->fetchColumn();
+    }
   }
 
   /**
@@ -167,6 +163,48 @@ class Connection extends DatabaseConnection {
     $pdo = new \PDO($dsn, $connection_options['username'], $connection_options['password'], $connection_options['pdo']);
 
     return $pdo;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  protected function setPrefix($prefix) {
+    if (is_array($prefix)) {
+      $this->prefixes = $prefix + ['default' => ''];
+    }
+    else {
+      $this->prefixes = ['default' => strtoupper($prefix)];
+    }
+
+    // Set up variables for use in prefixTables(). Replace table-specific
+    // prefixes first.
+    $this->prefixSearch = [];
+    $this->prefixReplace = [];
+    foreach ($this->prefixes as $key => $val) {
+      if ($key !== 'default') {
+        $this->prefixSearch[] = '{' . $key . '}';
+        $this->prefixReplace[] = $this->schema()->oid($val) . '.' . $this->schema()->oid($key);
+      }
+    }
+
+    // Ensure we do not have double quoted tables.
+    $this->prefixSearch[] = '"{';
+    $this->prefixSearch[] = '}"';
+    $this->prefixReplace[] = '{';
+    $this->prefixReplace[] = '}';
+
+    // Then replace remaining tables with the default prefix.
+    $this->prefixSearch[] = '{';
+    $this->prefixSearch[] = '}';
+    $this->prefixReplace[] = $this->schema()->oid($this->prefixes['default']) . '."';
+    $this->prefixReplace[] = '"';
+
+    // Set up a map of prefixed => un-prefixed tables.
+    foreach ($this->prefixes as $table_name => $prefix) {
+      if ($table_name !== 'default') {
+        $this->unprefixedTablesMap[$this->schema()->oid($prefix) . '.' . $this->schema()->oid($table_name)] = $table_name;
+      }
+    }
   }
 
   /**
@@ -502,44 +540,11 @@ class Connection extends DatabaseConnection {
   }
 
   /**
-   * Oracle connection helper.
-   */
-  public function checkDbPrefix($db_prefix) {
-    if (empty($db_prefix)) {
-      return NULL;
-    }
-
-    if (!isset($this->oraclePrefix[$db_prefix])) {
-      $this->oraclePrefix[$db_prefix] = $this->oracleQuery("select identifier.check_db_prefix(?) from dual", array($db_prefix))->fetchColumn();
-    }
-
-    return $this->oraclePrefix[$db_prefix];
-  }
-
-  /**
    * {@inheritdoc}
    */
   public function prefixTables($sql, $quoted = FALSE) {
-    $quote = '';
-    $ret = '';
-
-    if (!$quoted) {
-      $quote = '"';
-    }
-
-    // Replace specific table prefixes first.
-    foreach ($this->prefixes as $key => $val) {
-      $dp = $this->checkDbPrefix($val);
-      if (is_object($sql)) {
-        $sql = $sql->getQueryString();
-      }
-      $sql = strtr($sql, array('{' . strtoupper($key) . '}' => $quote . (empty($dp) ? strtoupper($key) : strtoupper($dp) . '"."' . strtoupper($key)) . $quote));
-    }
-
-    $dp = $this->checkDbPrefix($this->tablePrefix());
-    $ret = strtr($sql, array('{' => $quote . (empty($dp) ? '' : strtoupper($dp) . '"."'), '}' => $quote));
-
-    return $this->escapeAnsi($ret);
+    $sql = parent::prefixTables($sql);
+    return $this->escapeAnsi($sql);
   }
 
   /**
@@ -571,7 +576,6 @@ class Connection extends DatabaseConnection {
       "/([^\s\(]+) & ([^\s]+) = ([^\s\)]+)/",
       "/([^\s\(]+) & ([^\s]+) <> ([^\s\)]+)/",
       '/^RELEASE SAVEPOINT (.*)$/',
-      //'/\((.*) REGEXP (.*)\)/',
       '/([^\s\(]*) NOT REGEXP ([^\s\)]*)/',
       '/([^\s\(]*) REGEXP ([^\s\)]*)/',
     );
@@ -579,7 +583,6 @@ class Connection extends DatabaseConnection {
       "BITAND(\\1,\\2) = \\3",
       "BITAND(\\1,\\2) <> \\3",
       'begin null; end;',
-      //"REGEXP_LIKE(\\1,\\2)",
       "NOT REGEXP_LIKE(\\1, \\2)",
       "REGEXP_LIKE(\\1, \\2)",
     );
