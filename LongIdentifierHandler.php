@@ -83,7 +83,11 @@ class LongIdentifierHandler {
   public function resetLongIdentifiers() {
     // @TODO: would be wonderful to enable a memcached switch here.
     try {
-      $result = $this->connection->oracleQuery("select id, identifier from long_identifiers where substr(identifier,1,3) not in ('IDX','TRG','PK_','UK_') order by length(identifier) desc");
+      $result = $this->connection->queryOracle("
+        SELECT id, identifier
+          FROM long_identifiers
+         WHERE substr(identifier, 1, 3) NOT IN ('IDX','TRG','PK_','UK_')
+      ORDER BY length(identifier) DESC");
 
       while ($row = $result->fetchObject()) {
         $this->searchLongIdentifiers[] = '/\b' . $row->identifier . '\b/i';

@@ -37,8 +37,11 @@ class Schema extends DatabaseSchema {
    *
    * @var array
    */
-  private static $tableInformation = array();
+  protected $driverTableInformation = [];
 
+  /**
+   * @todo description
+   */
   private $foundLongIdentifier = FALSE;
 
   /**
@@ -49,7 +52,9 @@ class Schema extends DatabaseSchema {
 
     if (strlen($return) > ORACLE_IDENTIFIER_MAX_LENGTH) {
       $this->foundLongIdentifier = TRUE;
-      $return = $this->connection->oracleQuery('select identifier.get_for(?) from dual', array(strtoupper($return)))->fetchColumn();
+      $return = $this->connection
+        ->queryOracle('SELECT identifier.get_for(?) FROM dual', [strtoupper($return)])
+        ->fetchColumn();
     }
 
     $return = $prefix ? '{' . $return . '}' : strtoupper($return);
@@ -75,37 +80,35 @@ class Schema extends DatabaseSchema {
    * Oracle schema helper.
    */
   public function getTableInfo($table) {
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
+    $table_prefixed = $this->connection->prefixTables('{' . $table . '}');
+    $schema = $this->tableSchema($table_prefixed);
 
-    $info = new \stdClass();
-    try {
-      if (!isset(Schema::$tableInformation[$schema . '|' . $table])) {
-        $info->sequence_name = $this->connection->oracleQuery("select identifier.sequence_for_table(?,?) sequence_name from dual", array(strtoupper($table), $schema))->fetchColumn();
-        Schema::$tableInformation[$schema . '|' . $table] = $info;
+    if (!isset($this->driverTableInformation[$table_prefixed])) {
+      $this->driverTableInformation[$table_prefixed] = (object) [];
+
+      try {
+        $this->driverTableInformation[$table_prefixed] = $this->connection
+          ->queryOracle('SELECT identifier.sequence_for_table(?,?) sequence_name FROM dual', [$table, $schema])
+          ->fetchObject();
       }
-      else {
-        $info = Schema::$tableInformation[$schema . '|' . $table];
-      }
-    }
-    catch (\PDOException $e) {
-      if ($e->errorInfo[1] == '00904') {
-        // Ignore (may be a connection to a non drupal schema not having the
-        // identifier pkg). See http://drupal.org/node/1121044.
-      }
-      else {
-        throw $e;
+      catch (\PDOException $exception) {
+        if ($exception->errorInfo[1] != '00904') {
+          // Ignore (may be a connection to a non drupal schema not having the
+          // identifier pkg). See http://drupal.org/node/1121044.
+          throw $exception;
+        }
       }
     }
 
-    return $info;
+    return $this->driverTableInformation[$table_prefixed];
   }
 
   /**
    * Oracle schema helper.
    */
   public function removeTableInfoCache($table) {
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
-    unset(Schema::$tableInformation[$schema . '|' . $table]);
+    $table_prefixed = $this->connection->prefixTables('{' . $table . '}');
+    unset($this->driverTableInformation[$table_prefixed]);
   }
 
   /**
@@ -118,17 +121,17 @@ class Schema extends DatabaseSchema {
    * inserting not updating.
    */
   public function rebuildDefaultsTrigger($table) {
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
+    $schema = $this->tableSchema($this->connection->prefixTables('{' . $table . '}'));
     $oname = $this->oid($table, FALSE, FALSE);
 
     $trigger = 'create or replace trigger ' . $this->oid('TRG_' . $table . '_DEFS', TRUE) .
       ' before insert on ' . $this->oid($table, TRUE) .
       ' for each row begin /* defs trigger */ if inserting then ';
 
-    $serial_oname = $this->connection->oracleQuery("select field_name from table(identifier.get_serial(?,?))", array($table, $schema))->fetchColumn();
+    $serial_oname = $this->connection->queryOracle("select field_name from table(identifier.get_serial(?,?))", array($table, $schema))->fetchColumn();
     $serial_oname = $serial_oname ? $serial_oname : "^NNC^";
 
-    $stmt = $this->connection->oracleQuery(
+    $stmt = $this->connection->queryOracle(
       "select /*+ALL_ROWS*/ column_name,
        data_default
        from all_tab_columns
@@ -190,7 +193,7 @@ class Schema extends DatabaseSchema {
     $seqname_ser = $this->oid('SEQ_' . $table . '_' . $field_name, FALSE, FALSE);
     $fldname_ser = $this->oid($field_name, FALSE, FALSE);
 
-    $statements[] = 'CREATE SEQUENCE ' . $seqname . ($start_with != 1 ? ' START WITH ' . $start_with : '');
+    $statements[] = 'CREATE SEQUENCE ' . $seqname . ((int) $start_with > 1 ? ' START WITH ' . (int) $start_with : '');
     $statements[] = 'CREATE OR REPLACE TRIGGER ' . $trgname . ' before insert on ' .
       $oname . ' for each row declare v_id number:= 0; begin /* serial(' . $tblname_ser .
       ',' . $trgname_ser . ',' . $seqname_ser . ',' . $fldname_ser . ') */ if inserting then if :NEW.' .
@@ -223,7 +226,7 @@ class Schema extends DatabaseSchema {
 
     $sql_keys = array();
 
-    if (isset($table['primary key']) && is_array($table['primary key'])) {
+    if (!empty($table['primary key']) && is_array($table['primary key'])) {
       $this->ensureNotNullPrimaryKey($table['primary key'], $table['fields']);
       $sql_keys[] = 'CONSTRAINT ' . $this->oid('PK_' . $name) . ' PRIMARY KEY (' . $this->createColsSql($table['primary key']) . ')';
     }
@@ -260,6 +263,9 @@ class Schema extends DatabaseSchema {
     }
 
     foreach ($table['fields'] as $field_name => $field) {
+      if (!isset($field['type'])) {
+        continue;
+      }
       if ($field['type'] == 'serial') {
         $statements = array_merge($statements, $this->createSerialSql($name, $field_name));
       }
@@ -318,33 +324,6 @@ class Schema extends DatabaseSchema {
     }
 
     return $sql;
-  }
-
-  /**
-   * Set database-engine specific properties for a field.
-   *
-   * @param array $field
-   *   A field description array, as specified in the schema documentation.
-   *
-   * @return array
-   *   A field description array after changes.
-   */
-  protected function processField(array $field) {
-    if (!isset($field['size'])) {
-      $field['size'] = 'normal';
-    }
-
-    // Set the correct database-engine specific datatype.
-    // In case one is already provided, force it to uppercase.
-    if (isset($field['oracle_type'])) {
-      $field['oracle_type'] = drupal_strtoupper($field['oracle_type']);
-    }
-    else {
-      $map = $this->getFieldTypeMap();
-      $field['oracle_type'] = $map[$field['type'] . ':' . $field['size']];
-    }
-
-    return $field;
   }
 
   /**
@@ -407,12 +386,12 @@ class Schema extends DatabaseSchema {
     $oname = $this->oid($new_name, TRUE);
 
     if (!empty($info->sequence_name)) {
-      $this->failSafeDdl('DROP TRIGGER {' . $info->trigger_name . '}');
-      $this->failSafeDdl('DROP SEQUENCE {' . $info->sequence_name . '}');
+      $this->connection->querySafeDdl('DROP TRIGGER {' . $info->trigger_name . '}');
+      $this->connection->querySafeDdl('DROP SEQUENCE {' . $info->sequence_name . '}');
     }
 
     // Drop defaults trigger.
-    $this->failSafeDdl("DROP TRIGGER " . $this->oid('TRG_' . $table . '_DEFS', TRUE));
+    $this->connection->querySafeDdl('DROP TRIGGER ' . $this->oid('TRG_' . $table . '_DEFS', TRUE));
 
     // Should not use prefix because schema is not needed on rename.
     $this->connection->query('ALTER TABLE ' . $this->oid($table, TRUE) . ' RENAME TO ' . $this->oid($new_name, FALSE));
@@ -425,7 +404,7 @@ class Schema extends DatabaseSchema {
     }
 
     // Rename indexes.
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
+    $schema = $this->tableSchema($this->connection->prefixTables('{' . $table . '}'));
     if ($schema) {
       $stmt = $this->connection->query("SELECT nvl((select identifier from long_identifiers where 'L#'||to_char(id)= index_name),index_name) index_name FROM all_indexes WHERE table_name= ? and owner= ?", array(
         $this->oid($new_name, FALSE, FALSE),
@@ -449,13 +428,13 @@ class Schema extends DatabaseSchema {
    */
   public function dropTable($table) {
 
-    // Workaround to fix deleting of simpletest data.
-    if (preg_match('/^test\d+.*/', $table) === 1) {
-
-      // Always convert to uppercase, because of conversion to lowercase in
-      // findTables() method.
-      return $this->connection->query('DROP USER '. strtoupper($table) .' CASCADE');
-    }
+//    // Workaround to fix deleting of simpletest data.
+//    if (preg_match('/^test\d+.*/', $table) === 1) {
+//
+//      // Always convert to uppercase, because of conversion to lowercase in
+//      // findTables() method.
+//      return $this->connection->query('DROP USER '. strtoupper($table) .' CASCADE');
+//    }
 
     $info = $this->getTableInfo($table);
 
@@ -489,27 +468,54 @@ class Schema extends DatabaseSchema {
     }
 
     $fixnull = FALSE;
-
-    if (!empty($spec['not null']) && !isset($spec['default'])) {
+    if (!empty($spec['not null']) && !isset($spec['default']) && !$is_primary_key) {
       $fixnull = TRUE;
       $spec['not null'] = FALSE;
     }
 
+    // Actually add this field to the table.
     $query = 'ALTER TABLE ' . $this->oid($table, TRUE) . ' ADD (';
     $query .= $this->createFieldSql($field, $this->processField($spec)) . ')';
-
     $this->connection->query($query);
 
-    if (isset($spec['initial'])) {
-      $sql = 'UPDATE ' . $this->oid($table, TRUE) . ' SET ' . $this->oid($field) . ' = :initial_value';
-      $result = $this->connection->query($sql, array('initial_value' => $spec['initial']));
+    // Once the field is created, update to the needed initial values.
+    if (isset($spec['initial_from_field'])) {
+      if (isset($spec['initial'])) {
+        $expression = 'COALESCE(' . $this->oid($spec['initial_from_field']) . ', :default_initial_value)';
+        $arguments = [':default_initial_value' => $spec['initial']];
+
+        // @todo: wrong bind of number values (COALESCE return CHAR type).
+        if (is_int($spec['initial'])) {
+          $expression = 'COALESCE(' . $this->oid($spec['initial_from_field']) . ', ' . $spec['initial'] . ')';
+          $arguments = [];
+        }
+      }
+      else {
+        $expression = $spec['initial_from_field'];
+        $arguments = [];
+      }
+      $this->connection->update($table)
+        ->expression($field, $expression, $arguments)
+        ->execute();
+    }
+    elseif (isset($spec['initial'])) {
+      $this->connection->update($table)
+        ->fields([$field => $spec['initial']])
+        ->execute();
     }
 
+    // Not null.
     if ($fixnull) {
       $this->connection->query("ALTER TABLE " . $this->oid($table, TRUE) . " MODIFY (" . $this->oid($field) . " NOT NULL)");
     }
 
+    // Make sure to drop the existing primary key before adding a new one.
+    // This is only needed when adding a field because this method, unlike
+    // changeField(), is supposed to handle primary keys automatically.
     if (isset($new_keys)) {
+      if (isset($new_keys['primary key']) && $this->constraintExists($table, 'PK')) {
+        $this->dropPrimaryKey($table);
+      }
       $this->createKeys($table, $new_keys);
     }
 
@@ -518,11 +524,11 @@ class Schema extends DatabaseSchema {
       $this->connection->query('COMMENT ON COLUMN ' . $this->oid($table, TRUE) . '.' . $this->oid($field) . ' IS ' . $this->prepareComment($spec['description']));
     }
 
-    if ($spec['type'] == 'serial') {
+    // Create sequences.
+    if ($spec['type'] === 'serial') {
       $statements = $this->createSerialSql($table, $field);
-
       foreach ($statements as $statement) {
-        $this->connection->query($statement);
+        $this->connection->query($statement, [], ['allow_delimiter_in_query' => TRUE]);
       }
     }
 
@@ -533,21 +539,173 @@ class Schema extends DatabaseSchema {
    * {@inheritdoc}
    */
   public function dropField($table, $field) {
-    $info = $this->getTableSerialInfo($table);
-    if (!empty($info->sequence_name) && $this->oid($field, FALSE, FALSE) == $info->field_name) {
-      $this->failSafeDdl('DROP TRIGGER {' . $info->trigger_name . '}');
-      $this->failSafeDdl('DROP SEQUENCE {' . $info->sequence_name . '}');
-    }
-
-    try {
-      $this->connection->query('ALTER TABLE ' . $this->oid($table, TRUE) . ' DROP COLUMN ' . $this->oid($field));
-      $this->cleanUpSchema($table);
-
-      return TRUE;
-    }
-    catch (\Exception $e) {
+    if (!$this->fieldExists($table, $field)) {
       return FALSE;
     }
+
+    // Drop the sequence if exists.
+    $info = $this->getTableSerialInfo($table);
+    if (!empty($info->sequence_name) && $this->oid($field, FALSE, FALSE) == $info->field_name) {
+      $this->connection->querySafeDdl('DROP TRIGGER {' . $info->trigger_name . '}');
+      $this->connection->querySafeDdl('DROP SEQUENCE {' . $info->sequence_name . '}');
+    }
+
+    // Handle "ORA-12991: column is referenced in a multi-column constraint".
+    if (!$this->connection->querySafeDdl('ALTER TABLE {' . $table . '} DROP COLUMN ' . $this->oid($field), [], ['12991'])) {
+
+      // Drop the primary key if column in it.
+      if (in_array($field, $this->findPrimaryKeyColumns($table), TRUE)) {
+        $this->dropPrimaryKey($table);
+      }
+
+      // Re-try the deletion.
+      $this->connection->query('ALTER TABLE {' . $table . '} DROP COLUMN ' . $this->oid($field));
+    }
+    $this->cleanUpSchema($table);
+    return TRUE;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function changeField($table, $field, $field_new, $spec, $keys_new = array()) {
+    if (!$this->fieldExists($table, $field)) {
+      throw new SchemaObjectDoesNotExistException(t("Cannot change the definition of field @table.@name: field doesn't exist.", ['@table' => $table, '@name' => $field]));
+    }
+    if (($field != $field_new) && $this->fieldExists($table, $field_new)) {
+      throw new SchemaObjectExistsException(t('Cannot rename field @table.@name to @name_new: target field already exists.', ['@table' => $table, '@name' => $field, '@name_new' => $field_new]));
+    }
+    if (isset($keys_new['primary key']) && in_array($field_new, $keys_new['primary key'], TRUE)) {
+      $this->ensureNotNullPrimaryKey($keys_new['primary key'], [$field_new => $spec]);
+    }
+
+    // Proceed with table and constraints info.
+    $spec = $this->processField($spec);
+    $index_schema = $this->introspectIndexSchema($table);
+    $table_serial = $this->getTableSerialInfo($table);
+
+    // Prepare new field definition.
+    $field_def = $spec['oracle_type'];
+    if ($spec['oracle_type'] === 'varchar2') {
+      $field_def .= '(' . (!empty($spec['length']) ? $spec['length'] : ORACLE_MAX_VARCHAR2_LENGTH) . ' CHAR)';
+    }
+    elseif (isset($spec['precision'], $spec['scale'])) {
+      $field_def .= '(' . $spec['precision'] . ', ' . $spec['scale'] . ')';
+    }
+
+    // Remove old constraints.
+    if (!empty($table_serial->sequence_name) && $this->oid($field, FALSE, FALSE) == $table_serial->field_name) {
+      $this->connection->querySafeDdl('DROP TRIGGER {' . $table_serial->trigger_name . '}');
+      $this->connection->querySafeDdl('DROP SEQUENCE {' . $table_serial->sequence_name . '}');
+    }
+
+    // Convert the field type and check for the error:
+    // "ORA-01439: column to be modified must be empty to change datatype".
+    if (!$this->connection->querySafeDdl('ALTER TABLE {' . $table . '} MODIFY ' . $this->oid($field) . ' ' . $field_def, [], ['01439'])) {
+      $this->connection->query('ALTER TABLE {' . $table . '} RENAME COLUMN ' . $this->oid($field) . ' TO ' . $this->oid($field . '_old'));
+      $not_null = isset($spec['not null']) ? $spec['not null'] : FALSE;
+      unset($spec['not null']);
+      $this->addField($table, $field, $spec);
+      $this->connection->query('UPDATE {' . $table . '} SET ' . $this->oid($field) . ' = ' . $this->oid($field . '_old'));
+      if ($not_null) {
+        $this->connection->query('ALTER TABLE {' . $table . '} MODIFY (' . $this->oid($field) . ' NOT NULL)');
+      }
+      $this->dropField($table, $field . '_old');
+    }
+
+    // Remove old default.
+    $this->connection->query('ALTER TABLE {' . $table . '} MODIFY ' . $this->oid($field) . ' DEFAULT NULL');
+
+    // Handle not null specification.
+    if (isset($spec['not null'])) {
+      if ($spec['not null']) {
+        $nullaction = ' NOT NULL';
+      }
+      else {
+        $nullaction = ' NULL';
+      }
+
+      // We do not have current field NULL specification, so try to avoid:
+      // "ORA-01442: column to be modified to NOT NULL is already NOT NULL"
+      // "ORA-01451: column to be modified to NULL cannot be modified to NULL"
+      $this->connection->querySafeDdl('ALTER TABLE {' . $table . '} MODIFY ' . $this->oid($field) . $nullaction, [], [
+        '01442',
+        '01451',
+      ]);
+    }
+
+    // Create sequences.
+    if ($spec['type'] === 'serial') {
+      $nextval = $this->connection->query('SELECT MAX("' . $field . '") FROM {' . $table . '}')->fetchField();
+      $statements = $this->createSerialSql($table, $field, $nextval);
+      foreach ($statements as $statement) {
+        $this->connection->query($statement, [], ['allow_delimiter_in_query' => TRUE]);
+      }
+    }
+
+    // Rename the column if necessary.
+    if ($field !== $field_new) {
+      $this->connection->query('ALTER TABLE {' . $table . '} RENAME COLUMN ' . $this->oid($field) . ' TO ' . $this->oid($field_new));
+    }
+
+    // Add unsigned check if necessary.
+    if (!empty($spec['unsigned'])) {
+      $this->connection->query('ALTER TABLE {' . $table . '} ADD CHECK (' . $this->oid($field_new) . ' >= 0)');
+    }
+
+    // Add default if necessary.
+    if (isset($spec['default'])) {
+      $default = is_string($spec['default']) ? $this->connection->quote($this->connection->cleanupArgValue($spec['default'])) : $spec['default'];
+      $this->connection->query('ALTER TABLE {' . $table . '} MODIFY ' . $this->oid($field_new) . ' DEFAULT ' . $default);
+    }
+
+    // Change description if necessary.
+    if (!empty($spec['description'])) {
+      $this->connection->query('COMMENT ON COLUMN {' . $table . '}.' . $this->oid($field_new) . ' IS ' . $this->prepareComment($spec['description']));
+    }
+
+    // Update primary index because if needed.
+    if (in_array($field, $index_schema['primary key'], TRUE)) {
+      $index_schema['primary key'][array_search($field, $index_schema['primary key'], TRUE)] = $field_new;
+      $this->dropPrimaryKey($table);
+      $this->addPrimaryKey($table, $index_schema['primary key']);
+    }
+
+    // Set new keys.
+    if (isset($keys_new)) {
+      $this->createKeys($table, $keys_new);
+    }
+
+    $this->cleanUpSchema($table);
+  }
+
+  /**
+   * Set database-engine specific properties for a field.
+   *
+   * @param array $field
+   *   A field description array, as specified in the schema documentation.
+   *
+   * @return array
+   *   A field description array after changes.
+   */
+  protected function processField($field) {
+    if (!isset($field['size'])) {
+      $field['size'] = 'normal';
+    }
+
+    // Set the correct database-engine specific datatype.
+    $map = $this->getFieldTypeMap();
+    if (isset($field['oracle_type'])) {
+      $field['oracle_type'] = strtoupper($field['oracle_type']);
+    }
+    elseif (!isset($field['type']) && isset($field['pgsql_type'])) {
+      $field['oracle_type'] = $map[$field['pgsql_type'] . ':' . $field['size']];
+    }
+    elseif ($field['type']) {
+      $field['oracle_type'] = $map[$field['type'] . ':' . $field['size']];
+    }
+
+    return $field;
   }
 
   /**
@@ -574,9 +732,128 @@ class Schema extends DatabaseSchema {
   }
 
   /**
+   * Helper function: check if a constraint exists.
+   *
+   * @param string $table
+   *   The name of the table.
+   * @param string $name
+   *   The name of the constraint (typically 'pkey' or '[constraint]__key').
+   *
+   * @return bool
+   *   TRUE if the constraint exists, FALSE otherwise.
+   */
+  public function constraintExists($table, $name) {
+    $table_name = $this->oid($table, FALSE, FALSE);
+    $constraint_name = $this->oid($name . '_' . $table, FALSE, FALSE);
+    $constraint_schema = $this->connection->tablePrefix($table);
+    return (bool) $this->connection->query("
+     SELECT constraint_name
+       FROM all_constraints
+      WHERE constraint_type = 'P'
+        AND constraint_name = :constraint_name
+        AND table_name = :table_name
+        AND owner = :constraint_schema", [
+      ':table_name' => $table_name,
+      ':constraint_name' => $constraint_name,
+      ':constraint_schema' => $constraint_schema,
+    ])->fetchField();
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  protected function findPrimaryKeyColumns($table) {
+    if (!$this->tableExists($table)) {
+      return FALSE;
+    }
+
+    if (!$this->constraintExists($table, 'PK')) {
+      return [];
+    }
+
+    $table_name = $this->oid($table, FALSE, FALSE);
+    $constraint_name = $this->oid('PK_' . $table, FALSE, FALSE);
+    $constraint_schema = $this->connection->tablePrefix($table);
+    $constraint_columns = $this->connection->query('
+     SELECT column_name
+       FROM all_cons_columns
+      WHERE constraint_name = :constraint_name
+        AND table_name = :table_name
+        AND owner = :constraint_schema
+   ORDER BY position ASC', [
+      ':table_name' => $table_name,
+      ':constraint_name' => $constraint_name,
+      ':constraint_schema' => $constraint_schema,
+    ])->fetchCol();
+
+    return array_map('strtolower', $constraint_columns);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  protected function introspectIndexSchema($table) {
+    if (!$this->tableExists($table)) {
+      throw new SchemaObjectDoesNotExistException("The table {$table} doesn't exist.");
+    }
+
+    $index_schema = [
+      'primary key' => [],
+      'unique keys' => [],
+      'indexes' => [],
+    ];
+
+    $table_name = $this->oid($table, FALSE, FALSE);
+    $constraint_schema = $this->connection->tablePrefix($table);
+    $constraint_columns = $this->connection->query('
+     SELECT constraint_name, LOWER(column_name) AS column_name
+       FROM all_cons_columns
+      WHERE table_name = :table_name
+        AND owner = :constraint_schema
+   ORDER BY position ASC', [
+      ':table_name' => $table_name,
+      ':constraint_schema' => $constraint_schema,
+    ])->fetchAll();
+    foreach ($constraint_columns as $constraint) {
+      if (0 === strpos($constraint->constraint_name, 'PK_')) {
+        $index_schema['primary key'][] = $constraint->column_name;
+      }
+      elseif (0 === strpos($constraint->constraint_name, 'UK_')) {
+        // Format `UK_TABLE_NAME_KEY_NAME` into `key_name`.
+        $constraint_name = strtolower(substr($constraint->constraint_name, 4 + strlen($table)));
+        $index_schema['unique keys'][$constraint_name][] = $constraint->column_name;
+      }
+    }
+
+    $indexes = $this->connection->query('
+     SELECT index_name, LOWER(column_name) AS column_name
+       FROM all_ind_columns
+      WHERE table_name = :table_name
+        AND index_owner = :constraint_schema', [
+      ':table_name' => $table_name,
+      ':constraint_schema' => $constraint_schema,
+    ])->fetchAll();
+    foreach ($indexes as $index) {
+      if (0 === strpos($index->index_name, 'IDX_')) {
+        // Format `IDX_TABLE_NAME_INDEX_NAME` into `key_name`.
+        $index_name = strtolower(substr($index->index_name, 5 + strlen($table)));
+        $index_schema['indexes'][$index_name][] = $index->column_name;
+      }
+    }
+    return $index_schema;
+  }
+
+  /**
    * {@inheritdoc}
    */
   public function addPrimaryKey($table, $fields) {
+    if (!$this->tableExists($table)) {
+      throw new SchemaObjectDoesNotExistException(t("Cannot add primary key to table @table: table doesn't exist.", ['@table' => $table]));
+    }
+    if ($this->constraintExists($table, 'PK')) {
+      throw new SchemaObjectExistsException(t('Cannot add primary key to table @table: primary key already exists.', ['@table' => $table]));
+    }
+
     $this->connection->query('ALTER TABLE ' . $this->oid($table, TRUE) . ' ADD CONSTRAINT ' . $this->oid('PK_' . $table) . ' PRIMARY KEY (' . $this->createColsSql($fields) . ')');
   }
 
@@ -584,7 +861,12 @@ class Schema extends DatabaseSchema {
    * {@inheritdoc}
    */
   public function dropPrimaryKey($table) {
+    if (!$this->constraintExists($table, 'PK')) {
+      return FALSE;
+    }
+
     $this->connection->query('ALTER TABLE ' . $this->oid($table, TRUE) . ' DROP CONSTRAINT ' . $this->oid('PK_' . $table));
+    return TRUE;
   }
 
   /**
@@ -605,9 +887,16 @@ class Schema extends DatabaseSchema {
    * {@inheritdoc}
    */
   public function addIndex($table, $name, $fields, array $specs) {
-    $sql = $this->createIndexSql($table, $name, $fields, $specs);
-    foreach ($sql as $stmt) {
-      $this->connection->query($stmt);
+    if (!$this->tableExists($table)) {
+      throw new SchemaObjectDoesNotExistException(t("Cannot add index @name to table @table: table doesn't exist.", ['@table' => $table, '@name' => $name]));
+    }
+    if ($this->indexExists($table, $name)) {
+      throw new SchemaObjectExistsException(t('Cannot add index @name to table @table: index already exists.', ['@table' => $table, '@name' => $name]));
+    }
+
+    $statements = $this->createIndexSql($table, $name, $fields);
+    foreach ($statements as $statement) {
+      $this->connection->query($statement, [], ['allow_delimiter_in_query' => TRUE]);
     }
   }
 
@@ -626,62 +915,8 @@ class Schema extends DatabaseSchema {
   /**
    * {@inheritdoc}
    */
-  public function changeField($table, $field, $field_new, $spec, $keys_new = array()) {
-    if (!$this->fieldExists($table, $field)) {
-      throw new SchemaObjectDoesNotExistException(t("Cannot change the definition of field @table.@name: field doesn't exist.", ['@table' => $table, '@name' => $field]));
-    }
-    if (($field != $field_new) && $this->fieldExists($table, $field_new)) {
-      throw new SchemaObjectExistsException(t('Cannot rename field @table.@name to @name_new: target field already exists.', ['@table' => $table, '@name' => $field, '@name_new' => $field_new]));
-    }
-    if (isset($keys_new['primary key']) && in_array($field_new, $keys_new['primary key'], TRUE)) {
-      $this->ensureNotNullPrimaryKey($keys_new['primary key'], [$field_new => $spec]);
-    }
-
-    $info = $this->getTableSerialInfo($table);
-
-    if (!empty($info->sequence_name) && $this->oid($field, FALSE, FALSE) == $info->field_name) {
-      $this->failSafeDdl('DROP TRIGGER {' . $info->trigger_name . '}');
-      $this->failSafeDdl('DROP SEQUENCE {' . $info->sequence_name . '}');
-    }
-
-    $this->connection->query('ALTER TABLE ' . $this->oid($table, TRUE) . ' RENAME COLUMN ' . $this->oid($field) . ' TO ' . $this->oid($field . '_old'));
-    $not_null = isset($spec['not null']) ? $spec['not null'] : FALSE;
-    unset($spec['not null']);
-
-    if (!array_key_exists('size', $spec)) {
-      $spec['size'] = 'normal';
-    }
-
-    $this->addField($table, (string) $field_new, $spec);
-
-    $map = $this->getFieldTypeMap();
-    $this->connection->query('UPDATE ' . $this->oid($table, TRUE) . ' SET ' . $this->oid($field_new) . ' = ' . $this->oid($field . '_old'));
-
-    if ($not_null) {
-      $this->connection->query("ALTER TABLE " . $this->oid($table, TRUE) . ' MODIFY (' . $this->oid($field_new) . ' NOT NULL)');
-    }
-
-    $this->dropField($table, $field . '_old');
-
-    if (isset($keys_new)) {
-      $this->createKeys($table, $keys_new);
-    }
-
-    if (!empty($info->sequence_name) && $this->oid($field, FALSE, FALSE) == $info->field_name) {
-      $statements = $this->createSerialSql($table, $this->oid($field_new, FALSE, FALSE), $info->sequence_restart);
-      foreach ($statements as $statement) {
-        $this->connection->query($statement);
-      }
-    }
-
-    $this->cleanUpSchema($table);
-  }
-
-  /**
-   * {@inheritdoc}
-   */
   public function indexExists($table, $name) {
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
+    $schema = $this->tableSchema($this->connection->prefixTables('{' . $table . '}'));
 
     $oname = $this->oid('IDX_' . $table . '_' . $name, FALSE, FALSE);
 
@@ -710,7 +945,7 @@ class Schema extends DatabaseSchema {
    * Retrieve a table or column comment.
    */
   public function getComment($table, $column = NULL) {
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
+    $schema = $this->tableSchema($this->connection->prefixTables('{' . $table . '}'));
 
     if ($schema) {
       if (isset($column)) {
@@ -742,7 +977,7 @@ class Schema extends DatabaseSchema {
    * {@inheritdoc}
    */
   public function tableExists($table) {
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
+    $schema = $this->tableSchema($this->connection->prefixTables('{' . $table . '}'));
 
     if ($schema) {
       $retval = $this->connection->query("SELECT 1 FROM all_tables WHERE temporary= 'N' and table_name = ? and owner= ?", array(
@@ -768,7 +1003,7 @@ class Schema extends DatabaseSchema {
    * {@inheritdoc}
    */
   public function fieldExists($table, $column) {
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
+    $schema = $this->tableSchema($this->connection->prefixTables('{' . $table . '}'));
 
     if ($schema) {
       $retval = $this->connection->query("SELECT 1 FROM all_tab_columns WHERE column_name = ? and table_name = ? and owner= ?", array(
@@ -831,7 +1066,7 @@ class Schema extends DatabaseSchema {
       $tables[$table->table_name] = $table->table_name;
     }
 
-    // @todo: simpletest data truncating
+    // @todo: simpletest data truncating - add "only prefix" for user deletion.
     // @see EnvironmentCleaner::doCleanDatabase().
     // if ($table_expression === 'TEST%') {
     //   $all_tables = $this->connection->query("SELECT t.username FROM DBA_USERS t WHERE t.username LIKE 'TEST%'");
@@ -878,7 +1113,7 @@ class Schema extends DatabaseSchema {
    * Oracle schema helper.
    */
   private function getTableSerialInfo($table) {
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
+    $schema = $this->tableSchema($this->connection->prefixTables('{' . $table . '}'));
     return $this->connection->query("select * from table(identifier.get_serial(?, ?))", array(strtoupper($table), $schema))->fetchObject();
   }
 
@@ -909,8 +1144,8 @@ class Schema extends DatabaseSchema {
    * Oracle schema helper.
    */
   public function dropIndexByColsSql($table, $fields) {
-    $schema = $this->tableSchema($this->connection->prefixTables('{' . strtoupper($table) . '}', TRUE));
-    $stmt = $this->connection->oracleQuery(
+    $schema = $this->tableSchema($this->connection->prefixTables('{' . $table . '}'));
+    $stmt = $this->connection->queryOracle(
       "select i.index_name,
        e.column_expression exp,
        i.column_name col
@@ -1015,18 +1250,6 @@ class Schema extends DatabaseSchema {
     $this->resetLongIdentifiers();
     $this->removeTableInfoCache($cache_table);
     $this->rebuildDefaultsTrigger($trigger_table);
-  }
-
-  /**
-   * Oracle schema helper.
-   */
-  private function failSafeDdl($ddl) {
-    try {
-      $this->connection->query($ddl);
-    }
-    catch (\Exception $e) {
-      // Ignore.
-    }
   }
 
 }

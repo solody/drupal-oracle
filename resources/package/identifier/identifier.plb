@@ -50,11 +50,11 @@ as
   function sequence_for_table(p_table varchar2, p_schema varchar2)
   return varchar2
   as
-    v_contraint_oname varchar2(31);
-    v_table_oname     varchar2(31):= upper(get_for(p_table));
+    v_contraint_oname varchar2(127);
+    v_table_oname     varchar2(127):= upper(get_for(p_table));
     v_col_name        varchar2(4000);
-    v_sequence_oname  varchar2(31);
-    v_schema          varchar2(31):= nvl(upper(p_schema),user);
+    v_sequence_oname  varchar2(127);
+    v_schema          varchar2(127):= nvl(upper(p_schema),user);
   begin
 
      select constraint_name
@@ -106,8 +106,8 @@ as
   pipelined
   as
     v_serial          serial_info;
-    v_table_oname     varchar2(30):= upper(get_for(p_table));
-    v_schema          varchar2(31):= nvl(upper(p_schema),user);
+    v_table_oname     varchar2(127):= upper(get_for(p_table));
+    v_schema          varchar2(127):= nvl(upper(p_schema),user);
     v_serial_re       varchar2(255):= '\/\* serial\((\w+),(\w+),(\w+),(\w+)\) \*\/';
   begin
 

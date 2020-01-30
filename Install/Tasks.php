@@ -88,7 +88,7 @@ class Tasks extends InstallTasks {
    * Oracle helper for install tasks.
    */
   private function oracleQuery($sql, $args = NULL) {
-    return Database::getConnection()->oracleQuery($sql, $args);
+    return Database::getConnection()->queryOracle($sql, $args);
   }
 
   /**

@@ -77,6 +77,9 @@ class Connection extends DatabaseConnection {
    */
   protected $statementClass = 'Drupal\Driver\Database\oracle\Statement';
 
+  /**
+   * @todo proper description.
+   */
   private $maxVarchar2Size = ORACLE_MIN_PDO_BIND_LENGTH;
 
   /**
@@ -110,7 +113,21 @@ class Connection extends DatabaseConnection {
 
     // Ensure all used Oracle prefixes (users schemas) exists.
     foreach ($this->prefixes as $table_name => $prefix) {
-      $this->prefixes[$table_name] = $this->oracleQuery('SELECT identifier.check_db_prefix(?) FROM dual', [$prefix])->fetchColumn();
+      if (!empty($prefix)) {
+        // This will create the user if not exists.
+        // @todo: clean up Simpletest TEST% users.
+
+        // Allow ORA-00904 ("invalid identifier error") and ORA-06575 ("package
+        // or function is in an invalid state") and during the installation
+        // process (before the 'identifier' package were created).
+        $this->prefixes[$table_name] = $this
+          ->query('SELECT identifier.check_db_prefix(?) FROM dual', [$prefix], [
+            'oracle_exceptions_allowed' => ['06575', '00904'],
+            ]);
+        if ($this->prefixes[$table_name]) {
+          $this->prefixes[$table_name] = $this->prefixes[$table_name]->fetchColumn();
+        }
+      }
     }
   }
 
@@ -180,44 +197,50 @@ class Connection extends DatabaseConnection {
     // prefixes first.
     $this->prefixSearch = [];
     $this->prefixReplace = [];
-    foreach ($this->prefixes as $key => $val) {
-      if ($key !== 'default') {
-        $this->prefixSearch[] = '{' . $key . '}';
-        $this->prefixReplace[] = $this->schema()->oid($val) . '.' . $this->schema()->oid($key);
+    foreach ($this->prefixes as $table_name => $prefix) {
+      if ($table_name !== 'default') {
+
+        // Set up a map of prefixed => un-prefixed tables.
+        $prefixed = $this->schema()->oid($prefix) . '.' . $this->schema()->oid($table_name);
+        $this->unprefixedTablesMap[$prefixed] = $table_name;
+
+        // Add replacements.
+        $this->prefixSearch[] = '{' . $table_name . '}';
+        $this->prefixReplace[] = $prefixed;
       }
     }
 
     // Ensure we do not have double quoted tables.
     $this->prefixSearch[] = '"{';
     $this->prefixSearch[] = '}"';
-    $this->prefixReplace[] = '{';
-    $this->prefixReplace[] = '}';
-
-    // Then replace remaining tables with the default prefix.
     $this->prefixSearch[] = '{';
     $this->prefixSearch[] = '}';
-    $this->prefixReplace[] = $this->schema()->oid($this->prefixes['default']) . '."';
-    $this->prefixReplace[] = '"';
 
-    // Set up a map of prefixed => un-prefixed tables.
-    foreach ($this->prefixes as $table_name => $prefix) {
-      if ($table_name !== 'default') {
-        $this->unprefixedTablesMap[$this->schema()->oid($prefix) . '.' . $this->schema()->oid($table_name)] = $table_name;
-      }
+    if ($this->prefixes['default']) {
+      $this->prefixReplace[] = '{';
+      $this->prefixReplace[] = '}';
+      $this->prefixReplace[] = $this->schema()->oid($this->prefixes['default']) . '."';
+      $this->prefixReplace[] = '"';
+    }
+    else {
+      $this->prefixReplace[] = '{';
+      $this->prefixReplace[] = '}';
+      $this->prefixReplace[] = '"';
+      $this->prefixReplace[] = '"';
     }
   }
 
   /**
    * {@inheritdoc}
    */
-  public function query($query, array $args = array(), $options = array(), $retried = 0) {
+  public function query($query, array $args = [], $options = []) {
     // Use default values if not already set.
     $options += $this->defaultOptions();
 
     try {
       if ($query instanceof \PDOStatement) {
         $stmt = $query;
-        $stmt->execute(empty($args) ? NULL : (array) $args, $options);
+        $stmt->execute(empty($args) ? NULL : $args, $options);
       }
       else {
         $this->expandArguments($query, $args);
@@ -251,7 +274,7 @@ class Connection extends DatabaseConnection {
           return (isset($options['sequence_name']) ? $this->lastInsertId($options['sequence_name']) : FALSE);
 
         case Database::RETURN_NULL:
-          return;
+          return NULL;
 
         default:
           throw new \PDOException('Invalid return directive: ' . $options['return']);
@@ -261,33 +284,37 @@ class Connection extends DatabaseConnection {
       throw $exception;
     }
     catch (\Exception $e) {
-      $query_string = ($query instanceof \PDOStatement) ? $stmt->queryString : $query;
-
-      if ($this->exceptionQuery($query_string) && $retried != 1) {
-        return $this->query($query_string, $args, $options, 1);
-      }
-
-      // Catch long identifier errors for alias columns.
-      if (isset($e->errorInfo) && is_array($e->errorInfo) && $e->errorInfo[1] == '00972' && $retried != 2 && !$this->external) {
-        $this->getLongIdentifiersHandler()->findAndRemoveLongIdentifiers($query_string);
-        return $this->query($query_string, $args, $options, 2);
-      }
-
       if ($options['throw_exception']) {
-        $message = $query_string . (isset($stmt) && $stmt instanceof Statement ? " (prepared: " . $stmt->getQueryString() . " )" : "") . " e: " . $e->getMessage() . " args: " . print_r($args, TRUE);
+        $message = implode([
+          ($query instanceof \PDOStatement) ? $stmt->queryString : $query,
+          (isset($stmt) && $stmt instanceof Statement ? ' (prepared: ' . $stmt->getQueryString() . ' )' : ''),
+          ' e: ' . $e->getMessage(),
+          ' args: ' . print_r($args, TRUE)
+        ]);
         syslog(LOG_ERR, "error query: " . $message);
 
+        // Prepare the exception to throw.
+        $code = (int) $e->errorInfo[1];
         if (strpos($e->getMessage(), 'ORA-00001')) {
-          $exception = new IntegrityConstraintViolationException($message, (int) $e->getCode(), $e);
+          $exception = new IntegrityConstraintViolationException($message, $code, $e);
         }
         else {
-          $exception = new DatabaseExceptionWrapper($message, (int) $e->getCode(), $e);
+          $exception = new DatabaseExceptionWrapper($message, $code, $e);
         }
-        $exception->errorInfo = $e->errorInfo;
 
-        if ($exception->errorInfo[1] == '1') {
+        // @todo: check whe do we need this?
+        $exception->errorInfo = $e->errorInfo;
+        if ($code === 1) {
           $exception->errorInfo[0] = '23000';
         }
+
+        // Ignore allowed errors.
+        if (isset($options['oracle_exceptions_allowed']) &&
+          in_array($code, $options['oracle_exceptions_allowed'], FALSE)) {
+          return NULL;
+        }
+
+        // Throw an exception otherwise.
         throw $exception;
       }
 
@@ -330,6 +357,82 @@ class Connection extends DatabaseConnection {
     }
     $this->query('CREATE GLOBAL TEMPORARY TABLE {' . $tablename . '} ON COMMIT PRESERVE ROWS AS ' . $query, $args, $options);
     return $tablename;
+  }
+
+  /**
+   * Helper function: allow to ignore some or all ORA errors.
+   *
+   * @param string $query
+   *   The query to execute. In most cases this will be a string containing
+   *   an SQL query with placeholders.
+   *
+   * @param array $args
+   *   An array of arguments for the prepared statement. If the prepared
+   *   statement uses ? placeholders, this array must be an indexed array.
+   *   If it contains named placeholders, it must be an associative array.
+   *
+   * @param array $allowed
+   *   The array of allowed ORA errors.
+   *
+   * @return bool
+   *   FALSE if the error occurs, TRUE if not.
+   *
+   * @throws \Drupal\Core\Database\DatabaseExceptionWrapper
+   *
+   * @deprecated use query() with oracle_exceptions_allowed option instead.
+   */
+  public function querySafeDdl($query, $args = [], $allowed = []) {
+    try {
+      $this->query($query, $args);
+    }
+    catch (DatabaseExceptionWrapper $exception) {
+      // Ignore all errors.
+      if (empty($allowed)) {
+        return FALSE;
+      }
+
+      // Ignore allowed errors.
+      if (in_array($exception->getCode(), $allowed, FALSE)) {
+        return FALSE;
+      }
+
+      // Throw an exception otherwise.
+      throw $exception;
+    }
+    return TRUE;
+  }
+
+  /**
+   * Executes an internal driver queries query string against the database.
+   *
+   * @param string $query
+   *   The query to execute. In most cases this will be a string containing
+   *   an SQL query with placeholders.
+   *
+   * @param array $args
+   *   An array of arguments for the prepared statement. If the prepared
+   *   statement uses ? placeholders, this array must be an indexed array.
+   *   If it contains named placeholders, it must be an associative array.
+   *
+   * @return \Drupal\Driver\Database\oracle\Statement
+   *
+   * @throws \Drupal\Core\Database\DatabaseExceptionWrapper
+   */
+  public function queryOracle($query, $args = []) {
+    // @todo: refactor to use query() method + additional options like
+    // `oracle_disable_log` + `oracle_processable_query`.
+
+    try {
+      $logger = $this->pauseLog();
+      $stmt = $this->prepare($query);
+      $stmt->execute($args);
+      $this->continueLog($logger);
+      return $stmt;
+    }
+    catch (DatabaseExceptionWrapper $exception) {
+      syslog(LOG_ERR, "error: {$exception->getMessage()} {$query}");
+      throw $exception;
+    }
   }
 
   /**
@@ -430,23 +533,6 @@ class Connection extends DatabaseConnection {
   }
 
   /**
-   * Executes an internal driver queries query string against the database.
-   */
-  public function oracleQuery($query, $args = NULL) {
-    try {
-      $logger = $this->pauseLog();
-      $stmt = $this->prepare($query);
-      $stmt->execute($args);
-      $this->continueLog($logger);
-      return $stmt;
-    }
-    catch (\Exception $e) {
-      syslog(LOG_ERR, "error: {$e->getMessage()} {$query}");
-      throw $e;
-    }
-  }
-
-  /**
    * Pause the database logging if any available.
    *
    * @see \Drupal\Core\Database::startLog()
@@ -508,7 +594,7 @@ class Connection extends DatabaseConnection {
     }
 
     try {
-      return $this->oracleQuery($this->prefixTables("select " . $name . ".currval from dual", TRUE))->fetchColumn();
+      return $this->queryOracle($this->prefixTables('SELECT ' . $name . '.currval from dual'))->fetchColumn();
     }
     catch (\Exception $e) {
       // Ignore if CURRVAL not set. May be an insert that specified the serial
@@ -521,8 +607,9 @@ class Connection extends DatabaseConnection {
    * {@inheritdoc}
    */
   public function generateTemporaryTableName() {
-    // FIXME: create a cleanup job.
-    return "TMP_" . $this->oracleQuery("SELECT userenv('sessionid') FROM dual")->fetchColumn() . "_" . $this->temporaryNameIndex++;
+    // @todo: create a cleanup job.
+    $session_id = $this->queryOracle("SELECT userenv('sessionid') FROM dual")->fetchColumn();
+    return 'TMP_' . $session_id . '_' . $this->temporaryNameIndex++;
   }
 
   /**
@@ -542,7 +629,7 @@ class Connection extends DatabaseConnection {
   /**
    * {@inheritdoc}
    */
-  public function prefixTables($sql, $quoted = FALSE) {
+  public function prefixTables($sql) {
     $sql = parent::prefixTables($sql);
     return $this->escapeAnsi($sql);
   }
@@ -558,7 +645,7 @@ class Connection extends DatabaseConnection {
     }
     $query = $this->escapeReserved($query);
     $query = $this->escapeCompatibility($query);
-    $query = $this->prefixTables($query, TRUE);
+    $query = $this->prefixTables($query);
     $query = $this->escapeIfFunction($query);
     return $this->prepare($query);
   }
@@ -572,25 +659,28 @@ class Connection extends DatabaseConnection {
       $query .= ' FROM DUAL';
     }
 
-    $search = array(
+    $search = [
       "/([^\s\(]+) & ([^\s]+) = ([^\s\)]+)/",
       "/([^\s\(]+) & ([^\s]+) <> ([^\s\)]+)/",
       '/^RELEASE SAVEPOINT (.*)$/',
       '/([^\s\(]*) NOT REGEXP ([^\s\)]*)/',
       '/([^\s\(]*) REGEXP ([^\s\)]*)/',
-    );
-    $replace = array(
+    ];
+    $replace = [
       "BITAND(\\1,\\2) = \\3",
       "BITAND(\\1,\\2) <> \\3",
       'begin null; end;',
       "NOT REGEXP_LIKE(\\1, \\2)",
       "REGEXP_LIKE(\\1, \\2)",
-    );
+    ];
     $query = preg_replace($search, $replace, $query);
 
-    $query = preg_replace_callback(
-      '/("\w+?")/',
-      function ($matches) {
+    // Find \w quoted with " but not quoted with '. Examples:
+    // COMMENT ON TABLE "match" IS 'description may contain "not_matched" text.'
+    // @TODO: this match wrongly (space before after '):
+    // COMMENT ON TABLE "not_match_but_should" IS ' <space'
+    $query = preg_replace_callback('/(?!\B\'[^\']*)("\w+?")(?![^\']*\'\B)/',
+      static function ($matches) {
         return strtoupper($matches[1]);
       },
       $query);
@@ -694,7 +784,7 @@ class Connection extends DatabaseConnection {
     if (is_object($query)) {
       $query = $query->getQueryString();
     }
-    $iquery = md5($this->prefixTables($query, TRUE));
+    $iquery = md5($this->prefixTables($query));
     if (isset($this->preparedStatements[$iquery])) {
       unset($this->preparedStatements[$iquery]);
     }
