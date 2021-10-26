@@ -637,7 +637,7 @@ class Connection extends DatabaseConnection {
   /**
    * Oracle connection helper.
    */
-  public function prepareQuery($query) {
+  public function prepareQuery($query, $quote_identifiers = true) {
     $query = $this->escapeEmptyLiterals($query);
     $query = $this->escapeAnsi($query);
     if (!$this->external) {
