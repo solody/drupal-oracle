@@ -1,7 +1,7 @@
 {
   "name": "drupal/oracle",
   "description": "Database driver that allows Drupal to use Oracle as database engine.",
-  "type": "drupal-database-driver",
+  "type": "drupal-module",
   "homepage": "https://drupal.org/project/oracle",
   "authors": [
     {
