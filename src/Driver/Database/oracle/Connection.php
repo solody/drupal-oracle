@@ -1,6 +1,6 @@
 <?php
 
-namespace Drupal\Driver\Database\oracle;
+namespace Drupal\oracle\Driver\Database\oracle;
 
 use Drupal\Core\Database\DatabaseExceptionWrapper;
 use Drupal\Core\Database\IntegrityConstraintViolationException;
@@ -75,7 +75,7 @@ class Connection extends DatabaseConnection {
   /**
    * {@inheritdoc}
    */
-  protected $statementClass = 'Drupal\Driver\Database\oracle\Statement';
+  protected $statementClass = 'Drupal\oracle\Driver\Database\oracle\Statement';
 
   /**
    * @todo proper description.

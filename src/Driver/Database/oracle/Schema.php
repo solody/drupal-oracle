@@ -1,6 +1,6 @@
 <?php
 
-namespace Drupal\Driver\Database\oracle;
+namespace Drupal\oracle\Driver\Database\oracle;
 
 use Drupal\Component\Utility\SafeMarkup;
 use Drupal\Core\Database\DatabaseExceptionWrapper;
