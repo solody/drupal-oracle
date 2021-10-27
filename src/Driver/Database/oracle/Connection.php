@@ -7,6 +7,8 @@ use Drupal\Core\Database\IntegrityConstraintViolationException;
 use Drupal\Core\Database\Database;
 use Drupal\Core\Database\Connection as DatabaseConnection;
 use Drupal\Core\Database\Log;
+use Drupal\Core\Database\StatementInterface;
+use Drupal\Core\Database\StatementWrapper;
 
 /**
  * Used to replace '' character in queries.
@@ -75,7 +77,12 @@ class Connection extends DatabaseConnection {
   /**
    * {@inheritdoc}
    */
-  protected $statementClass = 'Drupal\oracle\Driver\Database\oracle\Statement';
+  protected $statementClass = NULL;
+
+  /**
+   * {@inheritdoc}
+   */
+  protected $statementWrapperClass = StatementWrapper::class;
 
   /**
    * @todo proper description.
@@ -97,7 +104,7 @@ class Connection extends DatabaseConnection {
 
     // Setup session attributes.
     try {
-      $stmt = parent::prepare("begin ? := setup_session; end;");
+      $stmt = $connection->prepare("begin ? := setup_session; end;");
       $stmt->bindParam(1, $this->maxVarchar2Size, \PDO::PARAM_INT | \PDO::PARAM_INPUT_OUTPUT, 32);
       $stmt->execute();
     }
@@ -236,13 +243,14 @@ class Connection extends DatabaseConnection {
   public function query($query, array $args = [], $options = []) {
     // Use default values if not already set.
     $options += $this->defaultOptions();
+    assert(!isset($options['target']), 'Passing "target" option to query() has no effect. See https://www.drupal.org/node/2993033');
 
     try {
-      if ($query instanceof \PDOStatement) {
-        $stmt = $query;
-        $stmt->execute(empty($args) ? NULL : $args, $options);
-      }
-      else {
+
+      // We allow either a pre-bound statement object (deprecated) or a literal
+      // string. In either case, we want to end up with an executed statement
+      // object, which we pass to StatementInterface::execute.
+      if (is_string($query)) {
         $this->expandArguments($query, $args);
 
         // To protect against SQL injection, Drupal only supports executing one
@@ -258,8 +266,16 @@ class Connection extends DatabaseConnection {
           }
         }
 
-        $stmt = $this->prepareQuery($query);
-        $stmt->execute($this->cleanupArgs($args), $options);
+        $stmt = $this->prepareStatement($query, $options);
+        $stmt->execute($this->cleanupArgs($args));
+      }
+      elseif ($query instanceof StatementInterface) {
+        @trigger_error('Passing a StatementInterface object as a $query argument to ' . __METHOD__ . ' is deprecated in drupal:9.2.0 and is removed in drupal:10.0.0. Call the execute method from the StatementInterface object directly instead. See https://www.drupal.org/node/3154439', E_USER_DEPRECATED);
+        $stmt = $query;
+      }
+      elseif ($query instanceof \PDOStatement) {
+        @trigger_error('Passing a \\PDOStatement object as a $query argument to ' . __METHOD__ . ' is deprecated in drupal:9.2.0 and is removed in drupal:10.0.0. Call the execute method from the StatementInterface object directly instead. See https://www.drupal.org/node/3154439', E_USER_DEPRECATED);
+        $stmt = $query;
       }
 
       switch ($options['return']) {
@@ -424,7 +440,7 @@ class Connection extends DatabaseConnection {
 
     try {
       $logger = $this->pauseLog();
-      $stmt = $this->prepare($query);
+      $stmt = $this->connection->prepare($query);
       $stmt->execute($args);
       $this->continueLog($logger);
       return $stmt;
@@ -484,10 +500,10 @@ class Connection extends DatabaseConnection {
    * {@inheritdoc}
    */
   public function escapeTable($table) {
-    if (!isset($this->escapedNames[$table])) {
-      $this->escapedNames[$table] = preg_replace('/[^A-Za-z0-9_.@]+/', '', $table);
+    if (!isset($this->connection->escapedTables[$table])) {
+      $this->connection->escapedTables[$table] = preg_replace('/[^A-Za-z0-9_.@]+/', '', $table);
     }
-    return $this->escapedNames[$table];
+    return $this->connection->escapedTables[$table];
   }
 
   /**
@@ -577,7 +593,7 @@ class Connection extends DatabaseConnection {
     $oracle_unformatted_query = preg_replace(
       array_keys($_oracle_exception_queries),
       array_values($_oracle_exception_queries),
-      $oracle_unformatted_query,
+      $unformattedQuery,
       -1,
       $count
     );
@@ -647,7 +663,7 @@ class Connection extends DatabaseConnection {
     $query = $this->escapeCompatibility($query);
     $query = $this->prefixTables($query);
     $query = $this->escapeIfFunction($query);
-    return $this->prepare($query);
+    return $this->connection->prepare($query);
   }
 
   /**
@@ -913,7 +929,7 @@ class Connection extends DatabaseConnection {
    */
   public function readBlob($handle) {
     $handle = (int) substr($handle, strlen(ORACLE_BLOB_PREFIX));
-    $stmt = parent::prepare("select content from blobs where blobid= ?");
+    $stmt = $this->connection->prepare("select content from blobs where blobid= ?");
     $stmt->bindParam(1, $handle, \PDO::PARAM_INT);
     $stmt->execute();
     $return = $stmt->fetchColumn();

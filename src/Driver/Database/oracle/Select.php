@@ -13,7 +13,7 @@ class Select extends QuerySelect {
   /**
    * The connection object on which to run this query.
    *
-   * @var \Drupal\Driver\Database\oracle\Connection
+   * @var \Drupal\oracle\Driver\Database\oracle\Connection
    */
   protected $connection;
 

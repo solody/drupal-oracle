@@ -2,26 +2,26 @@
 
 namespace Drupal\oracle\Driver\Database\oracle;
 
-use Drupal\Core\Database\Statement as DatabaseStatement;
+use Drupal\Core\Database\StatementWrapper;
 
 /**
  * Oracle implementation of \Drupal\Core\Database\Query\Update.
  */
-class Statement extends DatabaseStatement implements \IteratorAggregate {
+class Statement extends StatementWrapper implements \IteratorAggregate {
 
   /**
    * Reference to the database connection object for this statement.
    *
    * The name $dbh is inherited from \PDOStatement.
    *
-   * @var \Drupal\Driver\Database\oracle\Connection
+   * @var \Drupal\oracle\Driver\Database\oracle\Connection
    */
   public $dbh;
 
   /**
    * {@inheritdoc}
    */
-  public function execute($args = array(), $options = array()) {
+  public function execute($args = [], $options = []) {
     if (!is_array($args) || !count($args)) {
       $args = NULL;
     }

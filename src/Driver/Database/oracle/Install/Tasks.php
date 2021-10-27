@@ -11,6 +11,8 @@ use Drupal\oracle\Driver\Database\oracle\Connection;
  */
 class Tasks extends InstallTasks {
 
+  const ORACLE_MINIMUM_VERSION = '19c';
+
   /**
    * {@inheritdoc}
    */
@@ -32,9 +34,7 @@ class Tasks extends InstallTasks {
    * {@inheritdoc}
    */
   public function minimumVersion() {
-
-    // @TODO: add version validation.
-    return NULL;
+    return static::ORACLE_MINIMUM_VERSION;
   }
 
   /**
@@ -56,7 +56,7 @@ class Tasks extends InstallTasks {
       // This doesn't actually test the connection.
       Database::setActiveConnection();
 
-      $dir = DRUPAL_ROOT . '/drivers/lib/Drupal/Driver/Database/oracle/resources';
+      $dir = __DIR__ . '/../resources';
       $this->determineSupportedBindSize();
       $this->createFailsafeObjects("{$dir}/table");
       $this->createFailsafeObjects("{$dir}/index");
