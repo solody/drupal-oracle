@@ -300,7 +300,7 @@ class Connection extends DatabaseConnection {
       throw $exception;
     }
     catch (\Exception $e) {
-      if ($options['throw_exception']) {
+      if (isset($options['throw_exception'])) {
         $message = implode([
           ($query instanceof \PDOStatement) ? $stmt->queryString : $query,
           (isset($stmt) && $stmt instanceof Statement ? ' (prepared: ' . $stmt->getQueryString() . ' )' : ''),
