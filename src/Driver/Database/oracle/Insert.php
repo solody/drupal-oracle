@@ -32,7 +32,7 @@ class Insert extends QueryInsert {
       $this->queryOptions['return'] = Database::RETURN_INSERT_ID;
     }
 
-    $stmt = $this->connection->prepareQuery((string) $this);
+    $stmt = $this->connection->prepareStatement((string) $this, $this->queryOptions);
 
     if (!empty($this->fromQuery)) {
       foreach ($this->fromQuery->getArguments() as $key => $value) {
@@ -40,15 +40,15 @@ class Insert extends QueryInsert {
         $stmt->bindParam($key, $value);
       }
       // The SelectQuery may contain arguments, load and pass them through.
-      return $this->connection->query($stmt, array(), $this->queryOptions);
+      // return $this->connection->query($stmt, array(), $this->queryOptions);
+      return $stmt->execute([], $this->queryOptions);
     }
 
     $last_insert_id = 0;
     $transaction = $this->connection->startTransaction();
-
     try {
       if (empty($this->insertValues)) {
-        $last_insert_id = $this->connection->query($stmt, array(), $this->queryOptions);
+        $last_insert_id = $stmt->execute(array(), $this->queryOptions);
       }
       else {
         foreach ($this->insertValues as &$insert_values) {
@@ -57,7 +57,7 @@ class Insert extends QueryInsert {
             $insert_values[$idx] = $this->connection->cleanupArgValue($insert_values[$idx]);
             $stmt->bindParam(':db_insert_placeholder_' . $max_placeholder++, $insert_values[$idx]);
           }
-          $last_insert_id = $this->connection->query($stmt, $insert_values, $this->queryOptions);
+          $last_insert_id = $stmt->execute($insert_values, $this->queryOptions);
         }
       }
     }

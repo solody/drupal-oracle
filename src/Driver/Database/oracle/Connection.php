@@ -440,7 +440,7 @@ class Connection extends DatabaseConnection {
 
     try {
       $logger = $this->pauseLog();
-      $stmt = $this->connection->prepare($query);
+      $stmt = $this->prepareStatement($query, []);
       $stmt->execute($args);
       $this->continueLog($logger);
       return $stmt;
@@ -653,7 +653,7 @@ class Connection extends DatabaseConnection {
   /**
    * Oracle connection helper.
    */
-  public function prepareQuery($query, $quote_identifiers = true) {
+  public function prepareStatement(string $query, array $options): StatementInterface {
     $query = $this->escapeEmptyLiterals($query);
     $query = $this->escapeAnsi($query);
     if (!$this->external) {
@@ -663,7 +663,7 @@ class Connection extends DatabaseConnection {
     $query = $this->escapeCompatibility($query);
     $query = $this->prefixTables($query);
     $query = $this->escapeIfFunction($query);
-    return $this->connection->prepare($query);
+    return new $this->statementWrapperClass($this, $this->connection, $query, $options['pdo'] ?? []);
   }
 
   /**
