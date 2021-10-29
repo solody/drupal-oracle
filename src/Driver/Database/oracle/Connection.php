@@ -267,7 +267,6 @@ class Connection extends DatabaseConnection {
         }
 
         $stmt = $this->prepareStatement($query, $options);
-        $stmt->execute($this->cleanupArgs($args));
       }
       elseif ($query instanceof StatementInterface) {
         @trigger_error('Passing a StatementInterface object as a $query argument to ' . __METHOD__ . ' is deprecated in drupal:9.2.0 and is removed in drupal:10.0.0. Call the execute method from the StatementInterface object directly instead. See https://www.drupal.org/node/3154439', E_USER_DEPRECATED);
@@ -276,6 +275,16 @@ class Connection extends DatabaseConnection {
       elseif ($query instanceof \PDOStatement) {
         @trigger_error('Passing a \\PDOStatement object as a $query argument to ' . __METHOD__ . ' is deprecated in drupal:9.2.0 and is removed in drupal:10.0.0. Call the execute method from the StatementInterface object directly instead. See https://www.drupal.org/node/3154439', E_USER_DEPRECATED);
         $stmt = $query;
+      }
+
+      if (is_string($query)) {
+        $stmt->execute($this->cleanupArgs($args), $options);
+      }
+      elseif ($query instanceof StatementInterface) {
+        $stmt->execute(NULL, $options);
+      }
+      elseif ($query instanceof \PDOStatement) {
+        $stmt->execute();
       }
 
       switch ($options['return']) {
@@ -430,17 +439,17 @@ class Connection extends DatabaseConnection {
    *   statement uses ? placeholders, this array must be an indexed array.
    *   If it contains named placeholders, it must be an associative array.
    *
-   * @return \Drupal\Driver\Database\oracle\Statement
+   * @return \Drupal\oracle\Driver\Database\oracle\Statement
    *
    * @throws \Drupal\Core\Database\DatabaseExceptionWrapper
    */
-  public function queryOracle($query, $args = []) {
+  public function queryOracle(string $query, $args = []) {
     // @todo: refactor to use query() method + additional options like
     // `oracle_disable_log` + `oracle_processable_query`.
 
     try {
       $logger = $this->pauseLog();
-      $stmt = $this->prepareStatement($query, []);
+      $stmt = $this->prepareStatement($query, $this->defaultOptions());
       $stmt->execute($args);
       $this->continueLog($logger);
       return $stmt;
@@ -653,6 +662,19 @@ class Connection extends DatabaseConnection {
   /**
    * Oracle connection helper.
    */
+  public function prepareQuery($query, $quote_identifiers = true) {
+    $query = $this->escapeEmptyLiterals($query);
+    $query = $this->escapeAnsi($query);
+    if (!$this->external) {
+      $query = $this->getLongIdentifiersHandler()->escapeLongIdentifiers($query);
+    }
+    $query = $this->escapeReserved($query);
+    $query = $this->escapeCompatibility($query);
+    $query = $this->prefixTables($query);
+    $query = $this->escapeIfFunction($query);
+    return $this->connection->prepare($query);
+  }
+
   public function prepareStatement(string $query, array $options): StatementInterface {
     $query = $this->escapeEmptyLiterals($query);
     $query = $this->escapeAnsi($query);

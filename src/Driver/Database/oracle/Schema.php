@@ -16,7 +16,7 @@ class Schema extends DatabaseSchema {
   /**
    * The database connection.
    *
-   * @var \Drupal\Driver\Database\oracle\Connection
+   * @var \Drupal\oracle\Driver\Database\oracle\Connection
    */
   protected $connection;
 
