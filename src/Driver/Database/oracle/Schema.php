@@ -171,7 +171,7 @@ class Schema extends DatabaseSchema {
     }
     $statements = $this->createTableSql($name, $table);
     foreach ($statements as $statement) {
-      $this->connection->query($statement, [], ['allow_delimiter_in_query' => TRUE]);
+      $this->connection->query($statement, [], ['throw_exception' => TRUE, 'allow_delimiter_in_query' => TRUE]);
     }
     $this->rebuildDefaultsTrigger($name);
     $this->resetLongIdentifiers();
